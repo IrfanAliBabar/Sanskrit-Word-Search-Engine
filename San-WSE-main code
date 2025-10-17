@@ -1,0 +1,358 @@
+import sys
+import os
+from PyQt5.QtWidgets import (
+    QMainWindow, QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QLineEdit, QTextEdit, QPushButton, QAction, QMessageBox, QFrame
+)
+from PyQt5.QtGui import QPainter, QLinearGradient, QColor, QFont
+from PyQt5.QtCore import Qt
+
+
+# Determining the Base Paths for Bundled vs Normal Execution
+if getattr(sys, 'frozen', False):
+    # Running in a bundled executable.
+    BASE_PATH = sys._MEIPASS  # Temporary folder where bundled files are extracted.
+    OUTPUT_PATH = os.path.dirname(sys.executable)  # Write output file alongside the executable.
+else:
+    BASE_PATH = os.path.abspath(".")
+    OUTPUT_PATH = BASE_PATH
+
+
+# File Paths: Input file is bundled; output file is written locally.
+INPUT_FILENAME = os.path.join(BASE_PATH, 'path_to_input_fil.txt')
+OUTPUT_FILENAME = os.path.join(OUTPUT_PATH, 'path_to_save_output_file.txt')
+
+# Clear the output file at startup
+with open(OUTPUT_FILENAME, 'w', encoding='utf-8') as f:
+    f.write("")
+
+
+# Helper Functions for Gradient Colors
+def hex_to_rgb(hex_color):
+    hex_color = hex_color.lstrip('#')
+    return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+
+def rgb_to_hex(rgb_tuple):
+    return '#%02x%02x%02x' % rgb_tuple
+
+
+# Processing Functions (with positions and distance output)
+def process_block(block, output_text, search_words, output_file, prev_metadata, found_flag):
+    lines = block.strip().split('\n')
+    text, chapter, chapter_id = prev_metadata
+    sent_counter, sent_subcounter, current_sentence = None, "Not Available", None
+    word_positions = {word: [] for word in search_words}
+
+    for line in lines:
+        line = line.strip()
+        if line.startswith('## text:'):
+            text = line.replace("## text:", "").strip()
+        elif line.startswith('## chapter:'):
+            chapter = line.replace("## chapter:", "").strip()
+        elif line.startswith('## chapter_id:'):
+            chapter_id = line.replace("## chapter_id:", "").strip()
+        elif line.startswith('# sent_counter ='):
+            sent_counter = line
+        elif line.startswith('# sent_subcounter ='):
+            sent_subcounter = line.replace('# sent_subcounter =', '').strip() or "Not Available"
+        elif line.startswith('# text ='):
+            current_sentence = line
+        else:
+            parts = line.split('\t')
+            if len(parts) < 3:
+                continue
+            try:
+                position = int(parts[0])
+            except:
+                continue
+            # Use the declension word (parts[1]); change to parts[2] if you want the lemma of the words.
+            lemma = parts[1]
+            if lemma in word_positions:
+                word_positions[lemma].append(position)
+
+    if all(word_positions[word] for word in search_words):
+        found_flag[0] = True
+        with open(output_file, 'a', encoding='utf-8') as f:
+            # Write metadata and basic details
+            f.write(f'## text: {text}\n')
+            f.write(f'## chapter: {chapter}\n')
+            f.write(f'## chapter_id: {chapter_id}\n')
+            f.write(f'{sent_counter}\n')
+            f.write(f'# sent_subcounter = {sent_subcounter}\n')
+            f.write(f'{current_sentence}\n\n')
+            # Write word positions
+            for word, positions in word_positions.items():
+                pos_str = ", ".join(map(str, positions))
+                f.write(f'The word "{word}" appears at positions: {pos_str}\n')
+            f.write("\n")
+            # Calculate distances between word pairs
+            reference_word = search_words[0]
+            reference_position = word_positions[reference_word][0]  # Take the first occurrence
+            for word in search_words[1:]:
+                if word_positions[word]:
+                    distance = word_positions[word][0] - reference_position
+                    if distance < 0:
+                        f.write(f'The word "{word}" appears {abs(distance)} positions before "{reference_word}".\n')
+                    elif distance > 0:
+                        f.write(f'The word "{word}" appears {distance} positions after "{reference_word}".\n')
+                    else:
+                        f.write(f'The word "{word}" appears at the same position as "{reference_word}".\n')
+            f.write('\n')
+        # Append to the GUI output area
+        output_text.append(f'## text: {text}')
+        output_text.append(f'## chapter: {chapter}')
+        output_text.append(f'## chapter_id: {chapter_id}')
+        output_text.append(f'{sent_counter}')
+        output_text.append(f'# sent_subcounter = {sent_subcounter}')
+        output_text.append(f'{current_sentence}\n')
+        for word, positions in word_positions.items():
+            pos_str = ", ".join(map(str, positions))
+            output_text.append(f'The word "{word}" appears at positions: {pos_str}')
+        # Append distance details
+        reference_word = search_words[0]
+        reference_position = word_positions[reference_word][0]
+        for word in search_words[1:]:
+            if word_positions[word]:
+                distance = word_positions[word][0] - reference_position
+                if distance < 0:
+                    output_text.append(f'The word "{word}" appears {abs(distance)} positions before "{reference_word}".')
+                elif distance > 0:
+                    output_text.append(f'The word "{word}" appears {distance} positions after "{reference_word}".')
+                else:
+                    output_text.append(f'The word "{word}" appears at the same position as "{reference_word}".')
+        output_text.append("\n" + "-" * 40 + "\n")
+
+#Processes the entire file to extract and write results.
+def process_file(search_words, input_filename, output_filename, output_text, search_label, result_label):
+
+    found_flag = [False]
+    search_label.setText(f"Searching for word(s): {', '.join(search_words)}")
+
+    try:
+        with open(input_filename, 'r', encoding='utf-8') as file:
+            data = file.read()
+    except Exception as e:
+        QMessageBox.critical(None, "File Error", f"Could not read the input file:\n{e}")
+        return
+
+    blocks = data.split('# text =')
+    prev_metadata = ("None", "None", "None")
+    for block in blocks:
+        if block.strip():
+            process_block('# text =' + block.strip(), output_text, search_words, output_filename, prev_metadata, found_flag)
+            lines = block.strip().split('\n')
+            for line in lines:
+                if line.startswith('## text:'):
+                    prev_metadata = (line.replace("## text:", "").strip(), prev_metadata[1], prev_metadata[2])
+                elif line.startswith('## chapter:'):
+                    prev_metadata = (prev_metadata[0], line.replace("## chapter:", "").strip(), prev_metadata[2])
+                elif line.startswith('## chapter_id:'):
+                    prev_metadata = (prev_metadata[0], prev_metadata[1], line.replace("## chapter_id:", "").strip())
+
+    if found_flag[0]:
+        final_message = "All required word(s) has/have been found in the dataset and displayed!"
+    else:
+        final_message = f"The word(s) {', '.join(search_words)} are not found (together) in any sentence."
+    result_label.setText(final_message)
+
+
+# Custom Gradient Header Widget
+class GradientHeader(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumHeight(80)
+        self.title = "Sanskrit Word(s) Search"
+        self.start_color = QColor("#2196F3")
+        self.end_color = QColor("#0D47A1")
+        self.text_color = QColor("#FFFFFF")
+        self.font = QFont("Segoe UI", 28, QFont.Bold)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        gradient = QLinearGradient(0, 0, 0, self.height())
+        gradient.setColorAt(0, self.start_color)
+        gradient.setColorAt(1, self.end_color)
+        painter.fillRect(self.rect(), gradient)
+        painter.setPen(self.text_color)
+        painter.setFont(self.font)
+        painter.drawText(self.rect(), Qt.AlignCenter, self.title)
+
+
+# Main Application Window
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Sanskrit Word(s) Search")
+        self.setGeometry(100, 100, 1024, 768)
+        self.setStyleSheet("background-color: #F5F5F5;")
+
+        # Create Menu Bar
+        menubar = self.menuBar()
+        file_menu = menubar.addMenu("File")
+        exit_action = QAction("Exit", self)
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+
+        help_menu = menubar.addMenu("Help")
+        about_action = QAction("About", self)
+        about_action.triggered.connect(self.show_about)
+        help_menu.addAction(about_action)
+
+        # Central widget and main layout
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        self.main_layout = QVBoxLayout(central_widget)
+        self.main_layout.setContentsMargins(15, 15, 15, 15)
+        self.main_layout.setSpacing(10)
+
+        # Gradient Header
+        self.header = GradientHeader()
+        self.main_layout.addWidget(self.header)
+
+        # Status Frame (for search and result messages)
+        self.status_frame = QFrame()
+        self.status_frame.setFrameShape(QFrame.StyledPanel)
+        self.status_frame.setStyleSheet("background-color: #E3F2FD; padding: 10px;")
+        status_layout = QVBoxLayout(self.status_frame)
+        self.search_label = QLabel("")
+        self.search_label.setFont(QFont("Segoe UI", 14, QFont.Bold))
+        self.search_label.setStyleSheet("color: #0D47A1;")
+        self.result_label = QLabel("")
+        self.result_label.setFont(QFont("Segoe UI", 14, QFont.Bold))
+        self.result_label.setStyleSheet("color: #0D47A1;")
+        status_layout.addWidget(self.search_label)
+        status_layout.addWidget(self.result_label)
+        self.main_layout.addWidget(self.status_frame)
+
+        # Input Container
+        self.input_container = QFrame()
+        self.input_container.setFrameShape(QFrame.StyledPanel)
+        self.input_container.setStyleSheet("background-color: #FFFFFF; padding: 10px;")
+        self.input_layout = QVBoxLayout(self.input_container)
+        self.main_layout.addWidget(self.input_container)
+
+        # Create initial input widget
+        self.create_initial_input_widget()
+
+        # Output Area (rich text, read-only)
+        self.output_area = QTextEdit()
+        self.output_area.setFont(QFont("Courier", 12))
+        self.output_area.setReadOnly(True)
+        self.output_area.setStyleSheet("background-color: #FFFFFF; color: #212121; padding: 5px;")
+        self.main_layout.addWidget(self.output_area, 1)
+
+        # Widget for search-again buttons
+        self.search_again_widget = None
+
+    def create_initial_input_widget(self):
+        self.initial_input_widget = QWidget()
+        initial_layout = QHBoxLayout(self.initial_input_widget)
+        label = QLabel("How many words do you want to search for?")
+        label.setFont(QFont("Segoe UI", 14))
+        self.num_words_edit = QLineEdit()
+        self.num_words_edit.setFont(QFont("Segoe UI", 14))
+        self.num_words_edit.setFixedWidth(50)
+        proceed_button = QPushButton("Proceed")
+        proceed_button.setFont(QFont("Segoe UI", 14, QFont.Bold))
+        proceed_button.setStyleSheet("background-color: #3F51B5; color: white; padding: 5px 15px;")
+        proceed_button.clicked.connect(self.create_word_entries)
+        initial_layout.addWidget(label)
+        initial_layout.addWidget(self.num_words_edit)
+        initial_layout.addWidget(proceed_button)
+        self.input_layout.addWidget(self.initial_input_widget)
+
+    def show_about(self):
+        QMessageBox.information(self, "About", "DCS-Sanskrit Word Search\nVersion 1.0\nDeveloped by Irfan Ali")
+
+    def create_word_entries(self):
+        try:
+            num = int(self.num_words_edit.text().strip())
+            if num <= 0:
+                raise ValueError
+        except ValueError:
+            QMessageBox.critical(self, "Invalid Input", "Please enter a valid positive integer.")
+            return
+
+        # Remove the initial number input widget
+        self.initial_input_widget.setParent(None)
+
+        # Create a set of word entry fields dynamically
+        self.word_entries = []
+        for i in range(num):
+            h_layout = QHBoxLayout()
+            lbl = QLabel(f"Enter word {i + 1} to search for:")
+            lbl.setFont(QFont("Segoe UI", 14))
+            entry = QLineEdit()
+            entry.setFont(QFont("Segoe UI", 14))
+            entry.setFixedWidth(400)
+            h_layout.addWidget(lbl)
+            h_layout.addWidget(entry)
+            container = QWidget()
+            container.setLayout(h_layout)
+            self.input_layout.addWidget(container)
+            self.word_entries.append(entry)
+
+        # "Start Search" button
+        start_button = QPushButton("Start Search")
+        start_button.setFont(QFont("Segoe UI", 14, QFont.Bold))
+        start_button.setStyleSheet("background-color: #3F51B5; color: white; padding: 5px 15px;")
+        start_button.clicked.connect(self.start_search)
+        self.input_layout.addWidget(start_button)
+
+    def start_search(self):
+        search_words = [entry.text().strip() for entry in self.word_entries if entry.text().strip()]
+        if not search_words:
+            QMessageBox.critical(self, "Input Error", "Please enter at least one word.")
+            return
+        self.search_label.setText(f"Searching for word(s): {', '.join(search_words)}")
+        self.output_area.clear()
+        process_file(search_words, INPUT_FILENAME, OUTPUT_FILENAME,
+                     self.output_area, self.search_label, self.result_label)
+        # After processing, show the search-again buttons below the output area
+        self.show_search_again_buttons()
+
+    def show_search_again_buttons(self):
+        # If it is already created, then remove the existing widget first
+        if self.search_again_widget is not None:
+            self.search_again_widget.setParent(None)
+        self.search_again_widget = QWidget()
+        h_layout = QHBoxLayout(self.search_again_widget)
+        yes_button = QPushButton("Yes (Search Again)")
+        no_button = QPushButton("No (Exit)")
+        yes_button.setFont(QFont("Segoe UI", 14, QFont.Bold))
+        no_button.setFont(QFont("Segoe UI", 14, QFont.Bold))
+        yes_button.setStyleSheet("background-color: #388E3C; color: white; padding: 5px 15px;")
+        no_button.setStyleSheet("background-color: #D32F2F; color: white; padding: 5px 15px;")
+        yes_button.clicked.connect(self.reset_app)
+        no_button.clicked.connect(self.close)
+        h_layout.addWidget(yes_button)
+        h_layout.addWidget(no_button)
+        self.main_layout.addWidget(self.search_again_widget)
+
+    def reset_app(self):
+        # Clear the input container layout by removing all widgets
+        for i in reversed(range(self.input_layout.count())):
+            widget = self.input_layout.itemAt(i).widget()
+            if widget is not None:
+                widget.setParent(None)
+        # Remove the search-again widget if present
+        if self.search_again_widget is not None:
+            self.search_again_widget.setParent(None)
+            self.search_again_widget = None
+        # Recreate the initial input widget
+        self.create_initial_input_widget()
+        # Clear output area and labels
+        self.output_area.clear()
+        self.search_label.setText("")
+        self.result_label.setText("")
+
+
+# Main Application Entry Point
+def main():
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec_())
+
+if __name__ == "__main__":
+    main()
